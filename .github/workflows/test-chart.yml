@@ -1,0 +1,339 @@
+name: Test Helm Chart
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  HELM_VERSION: "3.15.4"
+  KUBERNETES_VERSION: "1.31.2"
+
+jobs:
+  lint-and-validate:
+    name: Lint and Validate Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Helm repositories
+        run: |
+          helm repo add loft-sh https://charts.loft.sh
+          helm repo update
+
+      - name: Lint Helm chart
+        run: |
+          helm lint .
+          echo "✅ Helm lint passed"
+
+      - name: Validate chart templates
+        run: |
+          echo "🔍 Testing template rendering with default values..."
+          helm template test-release . --debug > /tmp/default-templates.yaml
+          
+          echo "🔍 Testing template rendering with development values..."
+          helm template test-release . -f values-development.yaml --debug > /tmp/dev-templates.yaml
+          
+          echo "🔍 Testing template rendering with production values..."
+          helm template test-release . -f values-production.yaml --debug > /tmp/prod-templates.yaml
+          
+          echo "✅ All template renderings successful"
+
+      - name: Validate Kubernetes manifests
+        run: |
+          # Install kubeval for Kubernetes manifest validation
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          chmod +x kubeval
+          
+          echo "🔍 Validating default templates..."
+          ./kubeval /tmp/default-templates.yaml --kubernetes-version ${{ env.KUBERNETES_VERSION }}
+          
+          echo "🔍 Validating development templates..."
+          ./kubeval /tmp/dev-templates.yaml --kubernetes-version ${{ env.KUBERNETES_VERSION }}
+          
+          echo "🔍 Validating production templates..."
+          ./kubeval /tmp/prod-templates.yaml --kubernetes-version ${{ env.KUBERNETES_VERSION }}
+          
+          echo "✅ All Kubernetes manifests are valid"
+
+      - name: Check for YAML syntax
+        run: |
+          # Install yamllint
+          pip install yamllint
+          
+          echo "🔍 Checking YAML syntax..."
+          yamllint values.yaml values-development.yaml values-production.yaml
+          yamllint templates/
+          yamllint docs/examples/
+          
+          echo "✅ All YAML files have valid syntax"
+
+  test-with-kind:
+    name: Test Chart with KIND
+    runs-on: ubuntu-latest
+    needs: lint-and-validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Create KIND cluster
+        uses: helm/kind-action@v1
+        with:
+          kubernetes_version: v${{ env.KUBERNETES_VERSION }}
+          cluster_name: test-cluster
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+              kubeadmConfigPatches:
+              - |
+                kind: InitConfiguration
+                nodeRegistration:
+                  kubeletExtraArgs:
+                    node-labels: "ingress-ready=true"
+              extraPortMappings:
+              - containerPort: 80
+                hostPort: 80
+                protocol: TCP
+              - containerPort: 443
+                hostPort: 443
+                protocol: TCP
+
+      - name: Install Cluster API Operator
+        run: |
+          echo "🚀 Installing Cluster API Operator..."
+          helm repo add capi-operator https://kubernetes-sigs.github.io/cluster-api-operator
+          helm repo update
+          
+          helm install capi-operator capi-operator/cluster-api-operator \
+            --namespace capi-operator-system \
+            --create-namespace \
+            --wait \
+            --timeout=300s
+          
+          echo "✅ Cluster API Operator installed"
+
+      - name: Install CAPI Providers
+        run: |
+          echo "🚀 Installing CAPI providers..."
+          kubectl apply -f templates/capi-providers.yaml
+          
+          # Wait for providers to be ready
+          echo "⏳ Waiting for providers to be ready..."
+          kubectl wait --for=condition=Ready coreProvider/cluster-api --timeout=300s -n capi-operator-system
+          kubectl wait --for=condition=Ready infrastructureProvider/vcluster --timeout=300s -n capi-operator-system
+          
+          echo "✅ CAPI providers installed and ready"
+
+      - name: Test Helm Chart Installation
+        run: |
+          echo "🚀 Testing Helm chart installation..."
+          
+          # Add required Helm repositories
+          helm repo add loft-sh https://charts.loft.sh
+          helm repo update
+          
+          # Install the chart with development values
+          helm install k8s-tst-dev . \
+            -f values-development.yaml \
+            --namespace vcluster-dev \
+            --create-namespace \
+            --wait \
+            --timeout=300s
+          
+          echo "✅ Chart installed successfully"
+
+      - name: Verify Installation
+        run: |
+          echo "🔍 Verifying installation..."
+          
+          # Check if resources are created
+          kubectl get clusters.cluster.x-k8s.io -n vcluster-dev
+          kubectl get vclusters.infrastructure.cluster.x-k8s.io -n vcluster-dev
+          
+          # Check resource status
+          kubectl describe cluster dev-workload -n vcluster-dev
+          kubectl describe vcluster dev-workload -n vcluster-dev
+          
+          echo "✅ Installation verified"
+
+      - name: Test Chart Upgrade
+        run: |
+          echo "🔄 Testing chart upgrade..."
+          
+          # Upgrade with different values
+          helm upgrade k8s-tst-dev . \
+            -f values-development.yaml \
+            --set vcluster.helmRelease.values.resources.requests.cpu=100m \
+            --namespace vcluster-dev \
+            --wait \
+            --timeout=300s
+          
+          echo "✅ Chart upgrade successful"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          helm uninstall k8s-tst-dev -n vcluster-dev || true
+          kubectl delete namespace vcluster-dev || true
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint-and-validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Run Checkov security scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: kubernetes,helm
+          output_format: sarif
+          output_file_path: reports/results.sarif
+          download_external_modules: true
+
+      - name: Upload Checkov results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/results.sarif
+
+  documentation-check:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check documentation completeness
+        run: |
+          echo "📚 Checking documentation completeness..."
+          
+          # Required files
+          required_files=(
+            "README.md"
+            "docs/README.md"
+            "docs/quick-start.md"
+            "docs/user-guide.md"
+            "docs/configuration.md"
+            "docs/developer-guide.md"
+            "docs/troubleshooting.md"
+            "docs/faq.md"
+            "docs/architecture.md"
+            "docs/template-analysis.md"
+            "docs/examples/README.md"
+            "docs/examples/development-environment.yaml"
+            "docs/examples/production-environment.yaml"
+          )
+          
+          missing_files=()
+          for file in "${required_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              missing_files+=("$file")
+            fi
+          done
+          
+          if [[ ${#missing_files[@]} -gt 0 ]]; then
+            echo "❌ Missing documentation files:"
+            printf '%s\n' "${missing_files[@]}"
+            exit 1
+          fi
+          
+          echo "✅ All required documentation files are present"
+
+      - name: Check for broken links
+        run: |
+          echo "🔗 Checking for broken internal links..."
+          
+          # Simple grep-based check for common markdown link patterns
+          find docs/ -name "*.md" -exec grep -l "\[.*\](.*\.md)" {} \; | while read file; do
+            echo "Checking links in $file..."
+            grep -o "\[.*\](.*\.md)" "$file" | sed 's/.*](\(.*\))/\1/' | while read link; do
+              if [[ ! -f "docs/$link" && ! -f "$link" ]]; then
+                echo "❌ Broken link found in $file: $link"
+                exit 1
+              fi
+            done
+          done
+          
+          echo "✅ No broken internal links found"
+
+  release-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-and-validate, test-with-kind, security-scan, documentation-check]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        run: |
+          echo "📝 Generating release notes..."
+          
+          # Get chart version
+          CHART_VERSION=$(grep '^version:' Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "Chart version: $CHART_VERSION"
+          
+          # Create release notes
+          cat > RELEASE_NOTES.md << EOF
+          # Release Notes - v${CHART_VERSION}
+          
+          ## Chart Information
+          - **Chart Version**: ${CHART_VERSION}
+          - **Kubernetes Version**: ${KUBERNETES_VERSION}
+          - **CAPI Version**: v1.8.5
+          - **vcluster Provider**: v0.2.2
+          - **vcluster Chart**: 0.22.1
+          
+          ## What's New
+          - All tests passing ✅
+          - Security scan completed ✅  
+          - Documentation validated ✅
+          
+          ## Installation
+          \`\`\`bash
+          helm repo add itl-k8s-capi https://github.com/ITlusions/ITL.K8s.CAPI/releases/download/v${CHART_VERSION}
+          helm install my-vcluster itl-k8s-capi/itl-k8s-capi
+          \`\`\`
+          
+          ## Compatibility
+          - Kubernetes: v1.30.x, v1.31.x
+          - Cluster API: v1.8.x
+          - Helm: v3.8+
+          EOF
+          
+          echo "✅ Release notes generated"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md

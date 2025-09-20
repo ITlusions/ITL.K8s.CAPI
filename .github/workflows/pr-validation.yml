@@ -1,0 +1,192 @@
+name: PR Chart Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'templates/**'
+      - 'values*.yaml'
+      - 'Chart.yaml'
+      - '.helmignore'
+
+env:
+  HELM_VERSION: "3.15.4"
+
+jobs:
+  validate-changes:
+    name: Validate Chart Changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout base branch
+        run: |
+          git fetch origin ${{ github.base_ref }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Add Helm repositories
+        run: |
+          helm repo add loft-sh https://charts.loft.sh
+          helm repo update
+
+      - name: Check chart version bump
+        run: |
+          echo "🔍 Checking if chart version was bumped..."
+          
+          BASE_VERSION=$(git show origin/${{ github.base_ref }}:Chart.yaml | grep '^version:' | awk '{print $2}' | tr -d '"')
+          CURRENT_VERSION=$(grep '^version:' Chart.yaml | awk '{print $2}' | tr -d '"')
+          
+          echo "Base version: $BASE_VERSION"
+          echo "Current version: $CURRENT_VERSION"
+          
+          if [[ "$BASE_VERSION" == "$CURRENT_VERSION" ]]; then
+            echo "⚠️  Chart version should be bumped for changes"
+            echo "::warning::Consider bumping the chart version in Chart.yaml"
+          else
+            echo "✅ Chart version was bumped: $BASE_VERSION -> $CURRENT_VERSION"
+            echo "CHART_VERSION_BUMPED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Lint chart
+        run: |
+          echo "🔍 Linting Helm chart..."
+          helm lint .
+          echo "✅ Chart lint passed"
+
+      - name: Template comparison
+        run: |
+          echo "🔍 Comparing template output..."
+          
+          # Generate templates for base branch
+          git checkout origin/${{ github.base_ref }} -- .
+          helm template base-release . > /tmp/base-templates.yaml
+          
+          # Generate templates for PR branch
+          git checkout ${{ github.sha }} -- .
+          helm template pr-release . > /tmp/pr-templates.yaml
+          
+          # Show differences
+          echo "📊 Template differences:"
+          if diff -u /tmp/base-templates.yaml /tmp/pr-templates.yaml > /tmp/template-diff.txt; then
+            echo "No template changes detected"
+          else
+            echo "Template changes detected:"
+            cat /tmp/template-diff.txt
+          fi
+
+      - name: Test with different value files
+        run: |
+          echo "🔍 Testing with different value configurations..."
+          
+          # Test default values
+          helm template test-default . --debug > /dev/null
+          echo "✅ Default values template rendered successfully"
+          
+          # Test development values
+          helm template test-dev . -f values-development.yaml --debug > /dev/null
+          echo "✅ Development values template rendered successfully"
+          
+          # Test production values  
+          helm template test-prod . -f values-production.yaml --debug > /dev/null
+          echo "✅ Production values template rendered successfully"
+
+      - name: Validate Kubernetes resources
+        run: |
+          echo "🔍 Validating Kubernetes resources..."
+          
+          # Install kubeval
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          chmod +x kubeval
+          
+          # Validate default templates
+          helm template validation-test . | ./kubeval --kubernetes-version 1.31.2
+          echo "✅ Default templates validation passed"
+          
+          # Validate development templates
+          helm template validation-test . -f values-development.yaml | ./kubeval --kubernetes-version 1.31.2
+          echo "✅ Development templates validation passed"
+          
+          # Validate production templates  
+          helm template validation-test . -f values-production.yaml | ./kubeval --kubernetes-version 1.31.2
+          echo "✅ Production templates validation passed"
+
+      - name: Check documentation updates
+        run: |
+          echo "🔍 Checking if documentation needs updates..."
+          
+          # Check if version references exist in docs
+          CHART_VERSION=$(grep '^version:' Chart.yaml | awk '{print $2}' | tr -d '"')
+          
+          # Files that might need version updates
+          files_to_check=(
+            "README.md"
+            "docs/quick-start.md"
+            "docs/user-guide.md"
+            "docs/examples/development-environment.yaml"
+            "docs/examples/production-environment.yaml"
+          )
+          
+          outdated_files=()
+          for file in "${files_to_check[@]}"; do
+            if [[ -f "$file" ]] && ! grep -q "$CHART_VERSION" "$file"; then
+              outdated_files+=("$file")
+            fi
+          done
+          
+          if [[ ${#outdated_files[@]} -gt 0 ]]; then
+            echo "⚠️  The following files may need version updates:"
+            printf '%s\n' "${outdated_files[@]}"
+            echo "::warning::Consider updating version references in documentation"
+          else
+            echo "✅ Documentation appears to be up to date"
+          fi
+
+      - name: Generate PR summary
+        run: |
+          echo "📋 Generating PR validation summary..."
+          
+          cat > /tmp/pr-summary.md << 'EOF'
+          ## 🔍 Chart Validation Summary
+          
+          This PR has been automatically validated with the following results:
+          
+          ### ✅ Validation Steps Completed
+          - Helm lint validation
+          - Template rendering test (default, dev, prod values)
+          - Kubernetes resource validation
+          - Template difference analysis
+          - Documentation consistency check
+          
+          ### 📊 Changes Overview
+          See the template comparison output above for detailed changes.
+          
+          ### 🚀 Next Steps
+          - Review the template differences
+          - Ensure documentation is updated if needed
+          - Test the changes in a development environment
+          - Update the chart version if not already done
+          
+          ---
+          *This summary was automatically generated by the PR validation workflow.*
+          EOF
+          
+          echo "Generated PR summary:"
+          cat /tmp/pr-summary.md
+
+      - name: Upload validation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chart-validation-results
+          path: |
+            /tmp/template-diff.txt
+            /tmp/pr-summary.md
+          retention-days: 7

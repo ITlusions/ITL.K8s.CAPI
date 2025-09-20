@@ -1,0 +1,218 @@
+name: Dependency Updates
+
+on:
+  schedule:
+    # Run weekly on Mondays at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+env:
+  HELM_VERSION: "3.15.4"
+
+jobs:
+  check-dependencies:
+    name: Check Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Check for Helm chart updates
+        id: helm_updates
+        run: |
+          echo "🔍 Checking for vcluster chart updates..."
+          
+          # Add vcluster repo
+          helm repo add loft-sh https://charts.loft.sh
+          helm repo update
+          
+          # Get current version from values.yaml
+          CURRENT_VERSION=$(grep -A 10 "helmRelease:" values.yaml | grep "version:" | awk '{print $2}' | tr -d '"')
+          echo "Current vcluster chart version: $CURRENT_VERSION"
+          
+          # Get latest version
+          LATEST_VERSION=$(helm search repo loft-sh/vcluster --output json | jq -r '.[0].version')
+          echo "Latest vcluster chart version: $LATEST_VERSION"
+          
+          # Compare versions
+          if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]]; then
+            echo "update_available=true" >> $GITHUB_OUTPUT
+            echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+            echo "📦 Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+          else
+            echo "update_available=false" >> $GITHUB_OUTPUT
+            echo "✅ vcluster chart is up to date"
+          fi
+
+      - name: Check for CAPI updates
+        id: capi_updates
+        run: |
+          echo "🔍 Checking for CAPI updates..."
+          
+          # Get current CAPI version from template
+          CURRENT_CAPI=$(grep -A 5 "spec:" templates/capi-providers.yaml | grep "version:" | head -1 | awk '{print $2}' | tr -d '"')
+          echo "Current CAPI version: $CURRENT_CAPI"
+          
+          # Get latest CAPI release from GitHub
+          LATEST_CAPI=$(curl -s https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest | jq -r '.tag_name')
+          echo "Latest CAPI version: $LATEST_CAPI"
+          
+          if [[ "$CURRENT_CAPI" != "$LATEST_CAPI" ]]; then
+            echo "capi_update_available=true" >> $GITHUB_OUTPUT
+            echo "current_capi=$CURRENT_CAPI" >> $GITHUB_OUTPUT
+            echo "latest_capi=$LATEST_CAPI" >> $GITHUB_OUTPUT
+            echo "📦 CAPI update available: $CURRENT_CAPI -> $LATEST_CAPI"
+          else
+            echo "capi_update_available=false" >> $GITHUB_OUTPUT
+            echo "✅ CAPI is up to date"
+          fi
+
+      - name: Check for vcluster provider updates
+        id: provider_updates
+        run: |
+          echo "🔍 Checking for vcluster provider updates..."
+          
+          # Get current provider version from template
+          CURRENT_PROVIDER=$(grep -A 10 "name: vcluster" templates/capi-providers.yaml | grep "version:" | awk '{print $2}' | tr -d '"')
+          echo "Current vcluster provider version: $CURRENT_PROVIDER"
+          
+          # Get latest provider release from GitHub
+          LATEST_PROVIDER=$(curl -s https://api.github.com/repos/loft-sh/cluster-api-provider-vcluster/releases/latest | jq -r '.tag_name')
+          echo "Latest vcluster provider version: $LATEST_PROVIDER"
+          
+          if [[ "$CURRENT_PROVIDER" != "$LATEST_PROVIDER" ]]; then
+            echo "provider_update_available=true" >> $GITHUB_OUTPUT
+            echo "current_provider=$CURRENT_PROVIDER" >> $GITHUB_OUTPUT
+            echo "latest_provider=$LATEST_PROVIDER" >> $GITHUB_OUTPUT
+            echo "📦 vcluster provider update available: $CURRENT_PROVIDER -> $LATEST_PROVIDER"
+          else
+            echo "provider_update_available=false" >> $GITHUB_OUTPUT
+            echo "✅ vcluster provider is up to date"
+          fi
+
+      - name: Create dependency update issue
+        if: steps.helm_updates.outputs.update_available == 'true' || steps.capi_updates.outputs.capi_update_available == 'true' || steps.provider_updates.outputs.provider_update_available == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const updates = [];
+            
+            if ('${{ steps.helm_updates.outputs.update_available }}' === 'true') {
+              updates.push(`- **vcluster Helm Chart**: ${{ steps.helm_updates.outputs.current_version }} → ${{ steps.helm_updates.outputs.latest_version }}`);
+            }
+            
+            if ('${{ steps.capi_updates.outputs.capi_update_available }}' === 'true') {
+              updates.push(`- **Cluster API**: ${{ steps.capi_updates.outputs.current_capi }} → ${{ steps.capi_updates.outputs.latest_capi }}`);
+            }
+            
+            if ('${{ steps.provider_updates.outputs.provider_update_available }}' === 'true') {
+              updates.push(`- **vcluster Provider**: ${{ steps.provider_updates.outputs.current_provider }} → ${{ steps.provider_updates.outputs.latest_provider }}`);
+            }
+            
+            const issueBody = `# 🔄 Dependency Updates Available
+            
+            The following dependencies have updates available:
+            
+            ${updates.join('\n')}
+            
+            ## 📋 Action Items
+            
+            - [ ] Review changelog for breaking changes
+            - [ ] Update dependency versions in appropriate files
+            - [ ] Test chart functionality with new versions
+            - [ ] Update documentation if needed
+            - [ ] Create new release if updates are applied
+            
+            ## 📁 Files to Update
+            
+            ${('${{ steps.helm_updates.outputs.update_available }}' === 'true') ? '- `values.yaml` - Update vcluster chart version\n' : ''}${('${{ steps.capi_updates.outputs.capi_update_available }}' === 'true') ? '- `templates/capi-providers.yaml` - Update CAPI core provider version\n' : ''}${('${{ steps.provider_updates.outputs.provider_update_available }}' === 'true') ? '- `templates/capi-providers.yaml` - Update vcluster provider version\n' : ''}
+            
+            ## 🔗 Release Notes
+            
+            ${('${{ steps.capi_updates.outputs.capi_update_available }}' === 'true') ? `- [CAPI ${{ steps.capi_updates.outputs.latest_capi }} Release Notes](https://github.com/kubernetes-sigs/cluster-api/releases/tag/${{ steps.capi_updates.outputs.latest_capi }})\n` : ''}${('${{ steps.provider_updates.outputs.provider_update_available }}' === 'true') ? `- [vcluster Provider ${{ steps.provider_updates.outputs.latest_provider }} Release Notes](https://github.com/loft-sh/cluster-api-provider-vcluster/releases/tag/${{ steps.provider_updates.outputs.latest_provider }})\n` : ''}
+            
+            ---
+            
+            This issue was automatically created by the dependency update workflow.`;
+            
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['dependencies', 'enhancement'],
+              state: 'open'
+            });
+            
+            const existingIssue = issues.find(issue => 
+              issue.title.includes('Dependency Updates Available')
+            );
+            
+            if (existingIssue) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: issueBody
+              });
+              console.log(`Updated existing issue #${existingIssue.number}`);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🔄 Dependency Updates Available',
+                body: issueBody,
+                labels: ['dependencies', 'enhancement']
+              });
+              console.log('Created new dependency update issue');
+            }
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/iac@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          file: ./
+          args: --severity-threshold=medium
+        continue-on-error: true
+
+      - name: Check for security advisories
+        run: |
+          echo "🔍 Checking for security advisories..."
+          
+          # Check GitHub security advisories for Kubernetes
+          curl -s "https://api.github.com/repos/kubernetes/kubernetes/security-advisories" | \
+            jq -r '.[] | select(.published_at > (now - 7*24*3600 | strftime("%Y-%m-%dT%H:%M:%SZ"))) | 
+                   "⚠️  New advisory: \(.summary) - \(.html_url)"' || true
+          
+          # Check for CAPI security advisories
+          curl -s "https://api.github.com/repos/kubernetes-sigs/cluster-api/security-advisories" | \
+            jq -r '.[] | select(.published_at > (now - 7*24*3600 | strftime("%Y-%m-%dT%H:%M:%SZ"))) | 
+                   "⚠️  New CAPI advisory: \(.summary) - \(.html_url)"' || true
+          
+          echo "✅ Security advisory check completed"

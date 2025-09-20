@@ -1,5 +1,9 @@
 # ITL Kubernetes Cluster API (CAPI) Helm Chart
 
+[![Test Chart](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/test-chart.yml/badge.svg)](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/test-chart.yml)
+[![Release Chart](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/release-chart.yml/badge.svg)](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/release-chart.yml)
+[![Dependency Updates](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/dependency-updates.yml/badge.svg)](https://github.com/ITlusions/ITL.K8s.CAPI/actions/workflows/dependency-updates.yml)
+
 This Helm chart deploys vcluster using Cluster API (CAPI) for creating lightweight, isolated Kubernetes clusters within your main cluster.
 
 ## Prerequisites
