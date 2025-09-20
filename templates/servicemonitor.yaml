@@ -1,0 +1,26 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "itl-k8s-capi.vclusterName" . }}-metrics
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace | default (include "itl-k8s-capi.vclusterNamespace" .) }}
+  labels:
+    {{- include "itl-k8s-capi.labels" . | nindent 4 }}
+    component: monitoring
+  {{- with (include "itl-k8s-capi.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: vcluster
+      release: {{ include "itl-k8s-capi.vclusterName" . }}
+  namespaceSelector:
+    matchNames:
+    - {{ include "itl-k8s-capi.vclusterNamespace" . }}
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+{{- end }}

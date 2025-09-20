@@ -1,0 +1,20 @@
+apiVersion: v2
+appVersion: v1.0.0
+description: A Helm chart for deploying vcluster using Cluster API (CAPI)
+keywords:
+- CAPI
+- vcluster
+- cluster-api
+- kubernetes
+maintainers:
+- email: info@itlusions.com
+  name: ITlusions
+name: itl-k8s-capi
+type: application
+version: 1.0.0
+
+# dependencies:
+#   - name: cluster-api-operator
+#     version: "0.11.0"
+#     repository: "https://kubernetes-sigs.github.io/cluster-api-operator"
+#     condition: clusterApi.operator.enabled

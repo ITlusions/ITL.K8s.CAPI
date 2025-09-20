@@ -1,0 +1,35 @@
+{{- if and .Values.externalAccess.enabled .Values.externalAccess.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "itl-k8s-capi.vclusterName" . }}-ingress
+  namespace: {{ include "itl-k8s-capi.vclusterNamespace" . }}
+  labels:
+    {{- include "itl-k8s-capi.labels" . | nindent 4 }}
+    component: ingress
+  annotations:
+    {{- with .Values.externalAccess.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with (include "itl-k8s-capi.annotations" .) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.externalAccess.ingress.tls.enabled }}
+  tls:
+  - hosts:
+    - {{ .Values.externalAccess.ingress.host }}
+    secretName: {{ .Values.externalAccess.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+  - host: {{ .Values.externalAccess.ingress.host }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "itl-k8s-capi.vclusterName" . }}
+            port:
+              number: 443
+{{- end }}

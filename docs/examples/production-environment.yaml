@@ -1,0 +1,255 @@
+# Example: Production Environment
+# Use Case: Production deployment with high availability and security
+# Prerequisites: Cluster API installed, production Kubernetes cluster, monitoring stack
+# Usage: helm install prod-vcluster . -f production-environment.yaml
+
+# Global settings for production
+global:
+  environment: "production"
+  labels:
+    tier: "production"
+    criticality: "high"
+    backup: "required"
+    monitoring: "required"
+  annotations:
+    contact: "platform-team@company.com"
+    documentation: "https://docs.company.com/vcluster"
+
+# Production vcluster configuration
+vcluster:
+  name: "k8s-tst-prod"
+  namespace: "k8s-tst-prod"
+  cluster:
+    kubernetesVersion: "v1.31.2"
+  
+  controlPlane:
+    replicas: 3
+  
+  # Production-grade configuration
+  helmRelease:
+    chart:
+      name: vcluster
+      repo: https://charts.loft.sh
+      version: 0.22.1
+    values:
+      # Production resource requirements
+      resources:
+        requests:
+          cpu: "1"
+          memory: "2Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+      
+      # Persistent storage with backup
+      storage:
+        persistence: true
+        size: "50Gi"
+        storageClass: "premium-ssd"
+      
+      # Production logging
+      logging:
+        level: "info"
+        format: "json"
+      
+      # LoadBalancer for external access
+      service:
+        type: "LoadBalancer"
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+          service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+      
+      # Security hardening
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: "RuntimeDefault"
+      
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      
+      # Production startup configuration
+      startup:
+        timeout: "10m"
+      
+      # Resource limits and requests for all containers
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+
+# External access via LoadBalancer with restricted access
+externalAccess:
+  enabled: true
+  type: "LoadBalancer"
+  loadBalancer:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    sourceRanges:
+      - "10.0.0.0/8"      # Internal corporate network
+      - "172.16.0.0/12"   # Private network ranges
+      - "192.168.0.0/16"  # Local networks
+
+# Comprehensive monitoring setup
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: "monitoring"
+    interval: "15s"
+    path: "/metrics"
+    labels:
+      app: "vcluster"
+      environment: "production"
+      team: "platform"
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8443"
+      prometheus.io/path: "/metrics"
+
+# High availability configuration
+highAvailability:
+  enabled: true
+  replicas: 3
+  
+  # Anti-affinity to spread pods across nodes
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: "app"
+            operator: "In"
+            values:
+            - "vcluster"
+        topologyKey: "kubernetes.io/hostname"
+    
+    # Prefer nodes with SSD storage
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+          - key: "storage-type"
+            operator: "In"
+            values:
+            - "ssd"
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+# Enhanced security configuration
+security:
+  rbac:
+    enabled: true
+    serviceAccount:
+      create: true
+      name: "prod-vcluster-sa"
+      annotations:
+        # AWS IAM role for service account (if using EKS)
+        eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/prod-vcluster-role"
+    
+    # Additional cluster role rules for production features
+    clusterRole:
+      create: true
+      rules:
+        - apiGroups: [""]
+          resources: ["nodes", "persistentvolumes"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["storage.k8s.io"]
+          resources: ["storageclasses"]
+          verbs: ["get", "list", "watch"]
+  
+  # Network policies for isolation
+  networkPolicy:
+    enabled: true
+    policyTypes:
+      - "Ingress"
+      - "Egress"
+    
+    # Allow ingress from monitoring namespace
+    ingress:
+      - from:
+        - namespaceSelector:
+            matchLabels:
+              name: "monitoring"
+        ports:
+        - protocol: "TCP"
+          port: 8443
+      
+      # Allow ingress from load balancer
+      - from: []
+        ports:
+        - protocol: "TCP"
+          port: 8443
+    
+    # Controlled egress
+    egress:
+      # DNS resolution
+      - to: []
+        ports:
+        - protocol: "TCP"
+          port: 53
+        - protocol: "UDP"
+          port: 53
+      
+      # HTTPS for container registry and API access
+      - to: []
+        ports:
+        - protocol: "TCP"
+          port: 443
+      
+      # Container registry access
+      - to: []
+        ports:
+        - protocol: "TCP"
+          port: 5000
+
+# Automated backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: "30d"       # Keep backups for 30 days
+  
+  storage:
+    type: "s3"
+    bucket: "company-vcluster-backups"
+    region: "us-west-2"
+    path: "production/vcluster-backups"
+    
+    # Use existing secret for S3 credentials
+    existingSecret: "backup-s3-credentials"
+    
+    # Encryption at rest
+    encryption:
+      enabled: true
+      kmsKeyId: "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
+
+# Resource quotas and limits
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    persistentvolumeclaims: "10"
+    services.loadbalancers: "1"
+
+# Additional production annotations
+annotations:
+  backup.schedule: "daily"
+  monitoring.alert-manager: "platform-team"
+  security.scan-required: "true"
+  compliance.soc2: "required"
+  disaster-recovery.rpo: "4h"
+  disaster-recovery.rto: "1h"

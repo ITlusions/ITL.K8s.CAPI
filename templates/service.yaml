@@ -1,0 +1,26 @@
+{{- if .Values.externalAccess.enabled }}
+{{- if eq .Values.externalAccess.type "LoadBalancer" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "itl-k8s-capi.vclusterName" . }}-external
+  namespace: {{ include "itl-k8s-capi.vclusterNamespace" . }}
+  labels:
+    {{- include "itl-k8s-capi.labels" . | nindent 4 }}
+    component: external-access
+  {{- with (include "itl-k8s-capi.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    app: vcluster
+    release: {{ include "itl-k8s-capi.vclusterName" . }}
+{{- end }}
+{{- end }}

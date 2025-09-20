@@ -1,0 +1,127 @@
+# Production environment values
+global:
+  environment: production
+
+vcluster:
+  name: prod-workload
+  namespace: vcluster-prod
+  
+  cluster:
+    kubernetesVersion: "v1.31.2"
+  
+  controlPlane:
+    replicas: 3
+  
+  helmRelease:
+    values:
+      # Production resources
+      resources:
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+        requests:
+          cpu: "1"
+          memory: "2Gi"
+      
+      # Enable persistence for production
+      storage:
+        persistence: true
+        size: "50Gi"
+        storageClass: "premium-ssd"
+      
+      service:
+        type: ClusterIP
+      
+      syncer:
+        extraArgs:
+          - --tls-san=vcluster.production.local
+          - --tls-san=$(POD_IP)
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+      
+      # Production kubeconfig
+      exportKubeConfig:
+        server: "https://vcluster.production.local"
+      
+      # Enable security contexts
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        fsGroup: 12345
+      
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 12345
+        capabilities:
+          drop:
+          - ALL
+      
+      # Enable metrics
+      serviceMonitor:
+        enabled: true
+
+# Enable external access via LoadBalancer
+externalAccess:
+  enabled: true
+  type: LoadBalancer
+  ingress:
+    enabled: true
+    host: vcluster.production.local
+    tls:
+      enabled: true
+      secretName: vcluster-prod-tls
+    annotations:
+      kubernetes.io/ingress.class: nginx
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+      nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+
+# Enable monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+
+# Enable HA
+highAvailability:
+  enabled: true
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app
+            operator: In
+            values:
+            - vcluster
+        topologyKey: kubernetes.io/hostname
+
+# Node selection for production workloads
+nodeSelector:
+  node-role.kubernetes.io/worker: "true"
+
+# Tolerations for dedicated nodes
+tolerations:
+- key: "workload"
+  operator: "Equal"
+  value: "vcluster"
+  effect: "NoSchedule"
+
+# Additional labels for production
+labels:
+  environment: production
+  tier: platform
+  team: infrastructure
+
+# Additional annotations
+annotations:
+  backup.kubernetes.io/enabled: "true"
+  monitoring.kubernetes.io/scrape: "true"

@@ -1,0 +1,97 @@
+# Example: Development Environment
+# Use Case: Local development with minimal resource usage
+# Prerequisites: Cluster API installed, local Kubernetes cluster
+# Usage: helm install dev-vcluster . -f development-environment.yaml
+
+# Global settings optimized for development
+global:
+  environment: "development"
+  labels:
+    purpose: "development"
+    managed-by: "helm"
+
+# Minimal vcluster configuration for development
+vcluster:
+  name: "k8s-tst-dev"
+  namespace: "k8s-tst-dev"
+  cluster:
+    kubernetesVersion: "v1.31.2"
+  
+  # Lightweight configuration for development
+  helmRelease:
+    chart:
+      name: vcluster
+      repo: https://charts.loft.sh
+      version: 0.22.1
+    values:
+      # Minimal resource requirements
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+      
+      # No persistent storage for ephemeral dev environments
+      storage:
+        persistence: false
+      
+      # Enable debug logging
+      logging:
+        level: "debug"
+      
+      # Simplified networking
+      service:
+        type: "ClusterIP"
+      
+      # Development-friendly security context
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+      
+      # Enable development features
+      dev:
+        enabled: true
+      
+      # Faster startup for development
+      startup:
+        timeout: "5m"
+
+# Disable external access for security in dev
+externalAccess:
+  enabled: false
+
+# Enable monitoring for development debugging
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: "monitoring"
+    interval: "30s"
+    labels:
+      environment: "development"
+
+# Disable HA for development
+highAvailability:
+  enabled: false
+
+# Basic security for development
+security:
+  rbac:
+    enabled: true
+    serviceAccount:
+      create: true
+      name: "dev-vcluster-sa"
+  networkPolicy:
+    enabled: false  # Disabled for easier development
+
+# No backup needed for ephemeral dev environments
+backup:
+  enabled: false
+
+# Additional development-specific annotations
+annotations:
+  description: "Development vcluster for local testing"
+  owner: "development-team"
+  auto-delete: "true"  # Could be used by cleanup automation

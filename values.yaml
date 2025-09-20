@@ -1,0 +1,147 @@
+# Global configuration
+global:
+  environment: production
+  
+# Cluster API configuration
+clusterApi:
+  operator:
+    enabled: false  # Set to true if you want to include the operator
+  management:
+    namespace: capi-system
+
+# VCluster configuration
+vcluster:
+  # Basic cluster information
+  name: workload-cluster
+  namespace: vcluster-system
+  
+  # Cluster configuration
+  cluster:
+    kubernetesVersion: "v1.31.2"
+    
+  # Infrastructure configuration
+  infrastructure:
+    provider: vcluster
+    
+  # Control plane configuration
+  controlPlane:
+    replicas: 1
+    
+  # Helm release configuration for vcluster
+  helmRelease:
+    chart:
+      name: vcluster
+      repo: https://charts.loft.sh
+      version: 0.22.1
+    values:
+      # VCluster core configuration
+      vcluster:
+        image: rancher/k3s:v1.31.2-k3s1
+        
+      # Resource management
+      resources:
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+          
+      # Storage configuration
+      storage:
+        persistence: true
+        size: "10Gi"
+        # storageClass: "default"  # Uncomment and set for specific storage class
+        
+      # Security configuration
+      rbac:
+        create: true
+        
+      # Networking configuration
+      service:
+        type: ClusterIP  # Change to LoadBalancer or NodePort for external access
+        
+      # Syncer configuration
+      syncer:
+        extraArgs:
+          - --tls-san=localhost
+          - --tls-san=$(POD_IP)
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+            
+      # Export kubeconfig configuration
+      exportKubeConfig:
+        server: "https://localhost"
+        
+      # Monitoring (if you have monitoring stack)
+      serviceMonitor:
+        enabled: false
+        
+      # Pod Security
+      podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        fsGroup: 12345
+        
+      # Security Context
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 12345
+        capabilities:
+          drop:
+          - ALL
+
+# External access configuration (for production)
+externalAccess:
+  enabled: false
+  type: LoadBalancer  # LoadBalancer, NodePort, or Ingress
+  ingress:
+    enabled: false
+    host: vcluster.example.com
+    tls:
+      enabled: false
+      secretName: vcluster-tls
+    annotations: {}
+      # kubernetes.io/ingress.class: nginx
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# Monitoring and observability
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: monitoring
+    
+# High Availability configuration
+highAvailability:
+  enabled: false
+  # Anti-affinity rules for production
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - vcluster
+          topologyKey: kubernetes.io/hostname
+
+# Node selection
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Additional labels and annotations
+labels: {}
+annotations: {}

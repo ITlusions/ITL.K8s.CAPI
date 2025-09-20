@@ -1,0 +1,61 @@
+# Development environment values
+global:
+  environment: development
+
+vcluster:
+  name: dev-workload
+  namespace: vcluster-dev
+  
+  cluster:
+    kubernetesVersion: "v1.31.2"
+  
+  helmRelease:
+    values:
+      # Minimal resources for development
+      resources:
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+      
+      # Disable persistence for development
+      storage:
+        persistence: false
+      
+      service:
+        type: NodePort
+      
+      syncer:
+        extraArgs:
+          - --tls-san=localhost
+          - --tls-san=127.0.0.1
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+      
+      # Development-friendly settings
+      exportKubeConfig:
+        server: "https://localhost"
+      
+      # Disable security contexts for easier debugging
+      podSecurityContext: {}
+      securityContext: {}
+
+# Enable external access for development
+externalAccess:
+  enabled: true
+  type: NodePort
+
+# Disable monitoring for development
+monitoring:
+  enabled: false
+
+# No HA for development
+highAvailability:
+  enabled: false
